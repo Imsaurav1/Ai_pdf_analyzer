@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from datetime import datetime
 import jwt
 
@@ -18,7 +18,10 @@ def get_current_user(token: str):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 @router.post("/analyze")
-async def analyze(data: AnalyzeRequest, token: str):
+async def analyze(
+    data: AnalyzeRequest,
+    token: str = Header(...)   # ✅ THIS IS THE FIX
+):
 
     email = get_current_user(token)
     user = await users_collection.find_one({"email": email})
