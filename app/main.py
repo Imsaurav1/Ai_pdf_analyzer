@@ -13,19 +13,31 @@ from groq import Groq
 # ── Config ────────────────────────────────────────────────────────────────────
 load_dotenv()
 
-MONGODB_URI     = os.getenv("MONGODB_URI")
-GROQ_API_KEY    = os.getenv("GROQ_API_KEY")
-JWT_SECRET      = os.getenv("JWT_SECRET", "supersecret")
-JWT_ALGORITHM   = "HS256"
+MONGODB_URI      = os.getenv("MONGODB_URI")
+GROQ_API_KEY     = os.getenv("GROQ_API_KEY")
+JWT_SECRET       = os.getenv("JWT_SECRET", "supersecret")
+JWT_ALGORITHM    = "HS256"
 FREE_DAILY_LIMIT = 5
-TEXT_LIMIT      = 6000
+TEXT_LIMIT       = 6000
+
+# ── App (MUST be before @app decorators) ─────────────────────────────────────
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Database ──────────────────────────────────────────────────────────────────
 mongo_client        = AsyncIOMotorClient(MONGODB_URI)
-db                  = mongo_client.get_default_database()
+db                  = mongo_client["pdf_analyzer"]
 users_collection    = db["users"]
 analysis_collection = db["analysis"]
 
+# ── Startup Check ─────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_check():
     try:
@@ -48,7 +60,7 @@ class UserLogin(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     text: str
-    document_type: str  # "resume" or "general"
+    document_type: str
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -95,23 +107,15 @@ async def check_rate_limit(user: dict) -> bool:
         user["daily_requests"] = 0
     return user.get("daily_requests", 0) < FREE_DAILY_LIMIT
 
-# ── App ───────────────────────────────────────────────────────────────────────
-app = FastAPI()
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.get("/")
+def home():
+    return {"message": "AI PDF Analyzer Running"}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ── Auth Routes ───────────────────────────────────────────────────────────────
-@app.post("/register")
+@app.post("/auth/register")
 async def register(user: UserCreate):
     if await users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="User already exists")
-
     await users_collection.insert_one({
         "email": user.email,
         "hashed_password": pwd_context.hash(user.password),
@@ -123,29 +127,23 @@ async def register(user: UserCreate):
     })
     return {"message": "User created"}
 
-@app.post("login")
+@app.post("/auth/login")
 async def login(user: UserLogin):
     db_user = await users_collection.find_one({"email": user.email})
     if not db_user or not pwd_context.verify(user.password, db_user["hashed_password"]):
         raise HTTPException(status_code=400, detail="Invalid credentials")
-
     return {"access_token": create_token(user.email)}
 
-# ── Analyze Route ─────────────────────────────────────────────────────────────
 @app.post("/analyze")
 async def analyze(data: AnalyzeRequest, token: str = Header(...)):
     email = get_current_user(token)
     user  = await users_collection.find_one({"email": email})
-
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-
     if not await check_rate_limit(user):
         raise HTTPException(status_code=429, detail="Daily limit reached")
-
     clean     = clean_text(data.text)
     ai_result = await analyze_with_ai(clean, data.document_type)
-
     await analysis_collection.insert_one({
         "user_email":    email,
         "document_type": data.document_type,
@@ -156,15 +154,8 @@ async def analyze(data: AnalyzeRequest, token: str = Header(...)):
         "tokens_used":   len(clean),
         "created_at":    datetime.utcnow(),
     })
-
     await users_collection.update_one(
         {"email": email},
         {"$inc": {"daily_requests": 1, "total_requests": 1}},
     )
-
     return {"result": ai_result}
-
-# ── Health ────────────────────────────────────────────────────────────────────
-@app.get("/")
-def home():
-    return {"message": "AI PDF Analyzer Running"}
