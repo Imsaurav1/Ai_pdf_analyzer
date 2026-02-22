@@ -26,6 +26,14 @@ db                  = mongo_client.get_default_database()
 users_collection    = db["users"]
 analysis_collection = db["analysis"]
 
+@app.on_event("startup")
+async def startup_check():
+    try:
+        await mongo_client.admin.command("ping")
+        print("✅ MongoDB connected successfully")
+    except Exception as e:
+        print(f"❌ MongoDB connection FAILED: {e}")
+
 # ── AI Client ─────────────────────────────────────────────────────────────────
 groq_client = Groq(api_key=GROQ_API_KEY)
 
