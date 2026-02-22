@@ -99,7 +99,7 @@ app.add_middleware(
 )
 
 # ── Auth Routes ───────────────────────────────────────────────────────────────
-@app.post("/auth/register")
+@app.post("/register")
 async def register(user: UserCreate):
     if await users_collection.find_one({"email": user.email}):
         raise HTTPException(status_code=400, detail="User already exists")
@@ -115,7 +115,7 @@ async def register(user: UserCreate):
     })
     return {"message": "User created"}
 
-@app.post("/auth/login")
+@app.post("login")
 async def login(user: UserLogin):
     db_user = await users_collection.find_one({"email": user.email})
     if not db_user or not pwd_context.verify(user.password, db_user["hashed_password"]):
